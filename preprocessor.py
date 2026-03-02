@@ -124,9 +124,14 @@ class DataPreprocessor:
         data = data.sort_values(['sku_ID', 'date'])
         data['original_unit_price'] = data.groupby('sku_ID')['original_unit_price'].ffill()
 
-        # 2.6 合并产品信息
-        data = data.merge(product[['sku_ID', 'category', 'subcategory', 'brand_ID',
-                                   'introduction_year', 'operation_mode']], on='sku_ID', how='left')
+        # 2.6 合并产品信息（避免category/subcategory/brand_ID列名冲突）
+        merge_cols = ['sku_ID', 'category', 'subcategory', 'brand_ID',
+                      'introduction_year', 'operation_mode']
+        # 先去掉data中已有的同名列（来自trans_daily）
+        drop_cols = [c for c in ['category', 'subcategory', 'brand_ID'] if c in data.columns]
+        if drop_cols:
+            data = data.drop(columns=drop_cols)
+        data = data.merge(product[merge_cols], on='sku_ID', how='left')
 
         # 2.7 处理库存数据（月度扩展到每日）
         inventory['year'] = inventory['date'].dt.year
@@ -338,23 +343,22 @@ class TimeSeriesDataset(Dataset):
             return self.X[idx], self.y[idx], self.sku_ids[idx]
         return self.X[idx], self.y[idx]
 
-
 def prepare_sequences(df, sequence_length=30, forecast_horizon=7, feature_cols=None):
     """
-    为模型准备序列数据
+    为模型准备序列数据 — y也做归一化，过滤低活跃SKU
     """
     if feature_cols is None:
         feature_cols = ['quantity', 'original_unit_price', 'rolling_mean_7',
                         'rolling_std_7', 'is_weekend', 'month', 'dayofweek',
                         'lag_1_sales', 'lag_2_sales', 'lag_7_sales']
 
-    # 只保留存在的列
     feature_cols = [col for col in feature_cols if col in df.columns]
 
     print("开始创建序列数据...")
 
     X_list, y_list, sku_list = [], [], []
     skus = df['sku_ID'].unique()
+    y_scaler_dict = {}
 
     for sku in tqdm(skus, desc='处理SKU', unit="sku"):
         sku_data = df[df['sku_ID'] == sku].sort_values('date')
@@ -362,20 +366,37 @@ def prepare_sequences(df, sequence_length=30, forecast_horizon=7, feature_cols=N
         if len(sku_data) <= sequence_length + forecast_horizon:
             continue
 
+        # 过滤：如果该SKU总销量太低，跳过
+        total_sales = sku_data['quantity'].sum()
+        if total_sales < 10:
+            continue
+
         # 获取特征数据
         sku_features = sku_data[feature_cols].values
 
-        # 归一化
-        scaler = MinMaxScaler()
-        sku_scaled = scaler.fit_transform(sku_features)
+        # X特征归一化
+        x_scaler = MinMaxScaler()
+        sku_scaled = x_scaler.fit_transform(sku_features)
 
-        # 创建序列
-        for i in range(len(sku_scaled) - sequence_length - forecast_horizon + 1):
+        # y销量归一化
+        y_vals = sku_data['quantity'].values.reshape(-1, 1)
+        y_scaler = MinMaxScaler()
+        y_scaled = y_scaler.fit_transform(y_vals).flatten()
+        y_scaler_dict[sku] = y_scaler
+
+        # 创建序列（步长=7减少样本重叠）
+        step = max(1, forecast_horizon // 2)
+        for i in range(0, len(sku_scaled) - sequence_length - forecast_horizon + 1, step):
+            y_seq = y_scaled[i + sequence_length:i + sequence_length + forecast_horizon]
+            # 过滤全零样本
+            if np.sum(y_seq) < 0.01:
+                continue
             X_list.append(sku_scaled[i:i + sequence_length])
-            y_list.append(sku_data['quantity'].values[i + sequence_length:i + sequence_length + forecast_horizon])
+            y_list.append(y_seq)
             sku_list.append(sku_data['sku_encoded'].iloc[i])
 
     if X_list:
+        print(f"有效序列数量: {len(X_list)}")
         return np.array(X_list), np.array(y_list), np.array(sku_list)
     else:
         return None, None, None

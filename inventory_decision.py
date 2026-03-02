@@ -13,48 +13,34 @@ plt.rcParams['axes.unicode_minus'] = False
 class InventoryDecisionSystem:
     """
     库存决策系统 - 将LSTM预测结果转化为实际经营决策
+    预测值为归一化(0-1)，通过scale_factor换算为近似真实销量
     """
 
-    def __init__(self, safety_factor=1.5, lead_time=3, service_level=0.95):
-        """
-        Args:
-            safety_factor: 安全库存系数
-            lead_time: 补货提前期（天）
-            service_level: 服务水平目标
-        """
+    def __init__(self, safety_factor=1.5, lead_time=3, service_level=0.95, scale_factor=100):
         self.safety_factor = safety_factor
         self.lead_time = lead_time
         self.service_level = service_level
+        self.scale_factor = scale_factor  # 近似SKU最大日销量
 
     def generate_decisions(self, predictions, targets, forecast_horizon=7):
-        """
-        基于预测结果生成库存决策
-        """
+        """基于预测结果生成库存决策（反归一化到近似真实销量）"""
         n_samples = len(predictions)
         decisions = []
 
         for i in range(n_samples):
-            pred = predictions[i]
-            actual = targets[i]
+            # 反归一化：乘以scale_factor得到近似真实量
+            pred = predictions[i] * self.scale_factor
+            actual = targets[i] * self.scale_factor
 
-            # 预测期间总需求
             total_demand = pred.sum()
-            # 日均需求
             avg_daily_demand = pred.mean()
-            # 需求标准差
             demand_std = pred.std()
 
-            # 安全库存 = 安全系数 × 需求标准差 × sqrt(提前期)
             safety_stock = self.safety_factor * demand_std * np.sqrt(self.lead_time)
-            # 再订货点 = 提前期内预期需求 + 安全库存
             reorder_point = avg_daily_demand * self.lead_time + safety_stock
-            # 建议补货量 = 预测期总需求 + 安全库存
             suggested_order = total_demand + safety_stock
-
-            # 最大库存水平
             max_inventory = suggested_order + safety_stock
 
-            # 计算预测准确率
             if np.sum(np.abs(actual)) > 0:
                 accuracy = 1 - np.mean(np.abs(pred - actual) / (np.abs(actual) + 1))
             else:
@@ -89,15 +75,15 @@ class InventoryDecisionSystem:
             'bg': '#FAFAFA'
         }
 
-        # 1. 需求预测概览
+        # 1. 需求预测概览（反归一化后显示）
         ax1 = fig.add_subplot(gs[0, 0])
         sample_idx = min(5, len(predictions))
         for i in range(sample_idx):
             days = range(1, forecast_horizon + 1)
-            ax1.plot(days, predictions[i], alpha=0.6, linewidth=1.5)
+            ax1.plot(days, predictions[i] * self.scale_factor, alpha=0.6, linewidth=1.5)
         ax1.set_title('需求预测趋势（多商品）', fontsize=13, fontweight='bold')
         ax1.set_xlabel('预测天数', fontsize=11)
-        ax1.set_ylabel('预测销量', fontsize=11)
+        ax1.set_ylabel('预测销量（件）', fontsize=11)
         ax1.grid(True, alpha=0.3, linestyle='--')
         ax1.set_facecolor(colors['bg'])
 
@@ -109,7 +95,7 @@ class InventoryDecisionSystem:
         ax2.axvline(x=np.median(safety_stocks), color=colors['danger'], linestyle='--',
                     linewidth=2, label=f'中位数: {np.median(safety_stocks):.1f}')
         ax2.set_title('安全库存分布', fontsize=13, fontweight='bold')
-        ax2.set_xlabel('安全库存量', fontsize=11)
+        ax2.set_xlabel('安全库存量（件）', fontsize=11)
         ax2.set_ylabel('频次', fontsize=11)
         ax2.legend(fontsize=10)
         ax2.grid(True, alpha=0.3, axis='y', linestyle='--')
@@ -123,7 +109,7 @@ class InventoryDecisionSystem:
         ax3.axvline(x=np.median(orders), color='#1B5E20', linestyle='--',
                     linewidth=2, label=f'中位数: {np.median(orders):.1f}')
         ax3.set_title('建议补货量分布', fontsize=13, fontweight='bold')
-        ax3.set_xlabel('补货量', fontsize=11)
+        ax3.set_xlabel('补货量（件）', fontsize=11)
         ax3.set_ylabel('频次', fontsize=11)
         ax3.legend(fontsize=10)
         ax3.grid(True, alpha=0.3, axis='y', linestyle='--')
@@ -132,7 +118,7 @@ class InventoryDecisionSystem:
         # 4. 库存策略决策示例
         ax4 = fig.add_subplot(gs[1, 0])
         example_idx = 0
-        pred = predictions[example_idx]
+        pred = predictions[example_idx] * self.scale_factor
         days = range(1, forecast_horizon + 1)
         safety = decisions_df.loc[example_idx, '安全库存']
         reorder = decisions_df.loc[example_idx, '再订货点']
@@ -149,7 +135,7 @@ class InventoryDecisionSystem:
 
         ax4.set_title('单品库存变化模拟', fontsize=13, fontweight='bold')
         ax4.set_xlabel('天数', fontsize=11)
-        ax4.set_ylabel('库存量', fontsize=11)
+        ax4.set_ylabel('库存量（件）', fontsize=11)
         ax4.legend(fontsize=9, loc='upper right')
         ax4.grid(True, alpha=0.3, linestyle='--')
         ax4.set_facecolor(colors['bg'])
@@ -163,6 +149,9 @@ class InventoryDecisionSystem:
             ((demand_cv >= 0.3) & (demand_cv < 0.7)).sum(),
             (demand_cv >= 0.7).sum()
         ]
+        # 确保至少有值（避免全0）
+        if sum(risk_counts) == 0:
+            risk_counts = [1, 0, 0]
         risk_colors = [colors['success'], colors['warning'], colors['danger']]
         wedges, texts, autotexts = ax5.pie(
             risk_counts, labels=risk_labels, autopct='%1.1f%%',
@@ -184,10 +173,10 @@ class InventoryDecisionSystem:
         avg_reorder = decisions_df['再订货点'].mean()
 
         metrics = [
-            ('日均需求', f'{avg_demand:.1f}', colors['primary']),
-            ('平均安全库存', f'{avg_safety:.1f}', colors['warning']),
-            ('平均补货量', f'{avg_order:.1f}', colors['success']),
-            ('平均再订货点', f'{avg_reorder:.1f}', colors['danger']),
+            ('日均需求（件）', f'{avg_demand:.1f}', colors['primary']),
+            ('平均安全库存（件）', f'{avg_safety:.1f}', colors['warning']),
+            ('平均补货量（件）', f'{avg_order:.1f}', colors['success']),
+            ('平均再订货点（件）', f'{avg_reorder:.1f}', colors['danger']),
         ]
 
         for i, (name, val, color) in enumerate(metrics):

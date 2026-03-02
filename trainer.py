@@ -22,7 +22,7 @@ class DemandTrainer:
     def __init__(self, model, device, learning_rate=0.001):
         self.model = model.to(device)
         self.device = device
-        self.criterion = nn.MSELoss()
+        self.criterion = nn.SmoothL1Loss()
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, mode='min', factor=0.5, patience=5

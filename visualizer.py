@@ -384,8 +384,13 @@ class ResultVisualizer:
         ]
 
         if 'mape' in arima_results:
-            improvement_mape = (arima_results['mape'] - lstm_results.get('mape', arima_results['mape'])) / arima_results['mape'] * 100
-            table_data.append(['MAPE', f"{lstm_results.get('mape', 'N/A')}", f"{arima_results['mape']:.1f}%", f"{improvement_mape:.1f}%"])
+            lstm_mape = lstm_results.get('mape', arima_results['mape'])
+            improvement_mape = (arima_results['mape'] - lstm_mape) / arima_results['mape'] * 100
+            try:
+                lstm_mape_str = f"{float(lstm_mape):.1f}%"
+            except (ValueError, TypeError):
+                lstm_mape_str = str(lstm_mape)
+            table_data.append(['MAPE', lstm_mape_str, f"{arima_results['mape']:.1f}%", f"{improvement_mape:.1f}%"])
 
         table = ax.table(cellText=table_data[1:], colLabels=table_data[0],
                          loc='center', cellLoc='center')

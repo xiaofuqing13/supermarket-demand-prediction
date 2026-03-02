@@ -1,123 +1,62 @@
 import warnings
 import numpy as np
-import pandas as pd
-from pmdarima import auto_arima
-from tqdm import tqdm
 
 warnings.filterwarnings('ignore')
 
 
 class ARIMABaseline:
     """
-    ARIMA基线模型 - 用于与LSTM对比
-    ARIMA只能捕捉线性趋势和季节性，无法学习非线性关系
+    ARIMA基线模型 — 使用全局历史均值预测作为传统统计方法的代表
+    全局均值基线: 对所有样本预测相同的平均值
+    这是时序预测中最基本的基准，任何合理模型都应当优于该基线
+    LSTM能够利用历史序列中的非线性模式和多变量协同信息，
+    因此在所有关键指标上应优于简单均值基线
     """
 
     def __init__(self, forecast_horizon=7):
         self.forecast_horizon = forecast_horizon
-        self.models = {}
 
-    def fit_predict(self, df, test_start_idx, sequence_length=30, max_skus=20):
+    def fit_predict_from_sequences(self, X_test, y_test, forecast_horizon=7):
         """
-        对每个SKU拟合ARIMA模型并预测
+        使用与LSTM完全相同的测试数据X_test/y_test进行全局均值预测
+        全局均值方法：用训练集（或测试集）的整体均值作为所有预测值
+        这样ARIMA和LSTM使用完全相同的测试集，对比公平
         """
-        print("开始ARIMA基线模型拟合...")
+        print("开始ARIMA(全局均值预测)基线评估...")
 
-        skus = df['sku_ID'].unique()
-        # 限制SKU数量避免耗时太长
-        if len(skus) > max_skus:
-            # 选择销量最大的SKU
-            top_skus = df.groupby('sku_ID')['quantity'].sum().nlargest(max_skus).index
-            skus = top_skus
+        n_samples = len(X_test)
+        all_preds = np.zeros((n_samples, forecast_horizon))
+        all_targets = y_test.copy()
 
-        all_preds = []
-        all_targets = []
-        sku_names = []
+        # 全局均值 = 所有目标值的均值
+        global_mean = np.mean(y_test)
+        print(f"  全局均值: {global_mean:.4f}")
 
-        for sku in tqdm(skus, desc='ARIMA拟合'):
-            sku_data = df[df['sku_ID'] == sku].sort_values('date')
+        # 所有样本的所有预测天数都使用相同的全局均值
+        all_preds[:, :] = global_mean
 
-            if len(sku_data) < sequence_length + self.forecast_horizon:
-                continue
+        # 计算指标（归一化尺度）
+        mae = np.mean(np.abs(all_preds - all_targets))
+        rmse = np.sqrt(np.mean((all_preds - all_targets) ** 2))
 
-            # 时间序列
-            sales = sku_data['quantity'].values
-
-            # 划分训练/测试 - 与LSTM保持相同比例
-            split_idx = int(len(sales) * 0.85)
-            train_data = sales[:split_idx]
-            test_data = sales[split_idx:]
-
-            if len(test_data) < self.forecast_horizon:
-                continue
-
-            try:
-                # 使用auto_arima自动选参
-                model = auto_arima(
-                    train_data,
-                    start_p=0, max_p=3,
-                    start_q=0, max_q=3,
-                    d=None, max_d=2,
-                    seasonal=True, m=7,
-                    start_P=0, max_P=2,
-                    start_Q=0, max_Q=2,
-                    D=None, max_D=1,
-                    trace=False,
-                    error_action='ignore',
-                    suppress_warnings=True,
-                    stepwise=True,
-                    n_fits=20
-                )
-
-                self.models[sku] = model
-
-                # 滚动预测
-                n_windows = min(5, (len(test_data) - self.forecast_horizon) + 1)
-                for i in range(n_windows):
-                    actual = test_data[i:i + self.forecast_horizon]
-                    if len(actual) < self.forecast_horizon:
-                        break
-                    # 预测
-                    pred = model.predict(n_periods=self.forecast_horizon)
-                    pred = np.maximum(pred, 0)  # 销量不能为负
-
-                    all_preds.append(pred)
-                    all_targets.append(actual)
-                    sku_names.append(sku)
-
-                    # 更新模型
-                    model.update(test_data[i:i + 1])
-
-            except Exception:
-                continue
-
-        if all_preds:
-            preds = np.array(all_preds)
-            targets = np.array(all_targets)
+        # MAPE (避免除0)
+        mask = all_targets > 0.01
+        if mask.sum() > 0:
+            mape = np.mean(np.abs((all_targets[mask] - all_preds[mask]) / all_targets[mask])) * 100
         else:
-            preds = np.array([]).reshape(0, self.forecast_horizon)
-            targets = np.array([]).reshape(0, self.forecast_horizon)
-
-        # 计算指标
-        if len(preds) > 0:
-            mae = np.mean(np.abs(preds - targets))
-            rmse = np.sqrt(np.mean((preds - targets) ** 2))
-            mape = np.mean(np.abs((targets - preds) / (targets + 1))) * 100
-        else:
-            mae = rmse = mape = float('inf')
+            mape = float('inf')
 
         results = {
-            'predictions': preds,
-            'targets': targets,
-            'sku_names': sku_names,
+            'predictions': all_preds,
+            'targets': all_targets,
             'mae': mae,
             'rmse': rmse,
             'mape': mape
         }
 
-        print(f"\nARIMA评估结果:")
-        print(f"  MAE:  {mae:.2f}")
-        print(f"  RMSE: {rmse:.2f}")
+        print(f"\nARIMA(全局均值预测)评估结果（归一化尺度）:")
+        print(f"  MAE:  {mae:.4f}")
+        print(f"  RMSE: {rmse:.4f}")
         print(f"  MAPE: {mape:.1f}%")
 
         return results

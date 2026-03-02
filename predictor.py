@@ -93,15 +93,22 @@ def evaluate_model(model, test_loader, device, criterion=nn.L1Loss()):
     mae = np.mean(np.abs(all_preds - all_targets))
     rmse = np.sqrt(np.mean((all_preds - all_targets) ** 2))
 
+    # MAPE (避免除0)
+    mask = all_targets > 0.01
+    if mask.sum() > 0:
+        mape = np.mean(np.abs((all_targets[mask] - all_preds[mask]) / all_targets[mask])) * 100
+    else:
+        mape = float('inf')
 
     print(f"评估结果:")
-    print(f"  MAE: {mae:.2f}")
-    print(f"  RMSE: {rmse:.2f}")
-
+    print(f"  MAE: {mae:.4f}")
+    print(f"  RMSE: {rmse:.4f}")
+    print(f"  MAPE: {mape:.1f}%")
 
     return {
         'mae': mae,
         'rmse': rmse,
+        'mape': mape,
         'predictions': all_preds,
         'targets': all_targets
     }

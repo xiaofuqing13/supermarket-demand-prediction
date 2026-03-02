@@ -111,7 +111,7 @@ def main():
 
     # 6. 创建数据加载器
     print("\n【步骤6】创建数据加载器")
-    batch_size = 16
+    batch_size = 32
 
     if sku_train is not None:
         train_dataset = TimeSeriesDataset(X_train, y_train, sku_train)
@@ -158,15 +158,19 @@ def main():
     print("\n【步骤8】训练LSTM模型")
     model_path = 'best_model.pth'
 
-    # 删除旧模型强制重新训练（新特征需要重新学习）
+    # 如果旧模型存在则加载，否则重新训练
     if os.path.exists(model_path):
-        os.remove(model_path)
-        print("已删除旧模型，使用新协同特征重新训练...")
+        try:
+            model.load_state_dict(torch.load(model_path, map_location=device))
+            print("已加载已有模型，跳过训练...")
+        except:
+            os.remove(model_path)
+            print("旧模型架构不匹配，重新训练...")
 
-    trainer = DemandTrainer(model, device, learning_rate=0.001)
+    trainer = DemandTrainer(model, device, learning_rate=0.0005)
     train_losses, val_losses = trainer.train(
         train_loader, val_loader,
-        epochs=50, early_stop_patience=10
+        epochs=80, early_stop_patience=15
     )
 
     # 训练曲线可视化
@@ -176,11 +180,12 @@ def main():
     print("\n【步骤9】评估LSTM模型")
     lstm_results = evaluate_model(model, test_loader, device)
 
-    # 10. ARIMA基线模型
-    print("\n【步骤10】ARIMA基线模型拟合（用于对比）")
+    # 10. ARIMA基线模型（朴素预测，使用与LSTM相同的测试集）
+    print("\n【步骤10】ARIMA基线模型（朴素预测，用于对比）")
     arima = ARIMABaseline(forecast_horizon=forecast_horizon)
-    arima_results = arima.fit_predict(data, test_start_idx=train_size + val_size,
-                                      sequence_length=sequence_length, max_skus=15)
+    arima_results = arima.fit_predict_from_sequences(
+        X_test, y_test, forecast_horizon=forecast_horizon
+    )
 
     # 11. 模型对比可视化
     print("\n【步骤11】LSTM vs ARIMA 模型对比可视化")
@@ -201,7 +206,12 @@ def main():
 
     # 12. 库存决策应用
     print("\n【步骤12】库存决策应用")
-    inv_system = InventoryDecisionSystem(safety_factor=1.5, lead_time=3, service_level=0.95)
+    # 计算scale_factor：各SKU的平均最大日销量
+    sku_max_sales = data.groupby('sku_ID')['quantity'].max()
+    scale_factor = max(sku_max_sales.median(), 50)  # 至少50
+    print(f"  销量换算系数 (scale_factor): {scale_factor:.0f}")
+    inv_system = InventoryDecisionSystem(safety_factor=1.5, lead_time=3,
+                                          service_level=0.95, scale_factor=scale_factor)
     decisions_df = inv_system.plot_inventory_dashboard(
         lstm_results['predictions'], lstm_results['targets'],
         forecast_horizon=forecast_horizon, save_dir='run'
