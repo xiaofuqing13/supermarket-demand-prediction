@@ -7,7 +7,7 @@
 
 基于 **LSTM神经网络** 的超市多品类商品协同需求预测系统，融合商品间互补性与替代性协同特征，配合ARIMA基线对比，并自动生成智能库存决策建议。
 
-![系统预览](images/dashboard_preview.png)
+![系统预览](images/inventory_dashboard.png)
 
 ---
 
@@ -34,7 +34,7 @@
 
 将互补/替代商品的聚合销量作为LSTM的额外输入特征，使模型能够学习商品间的协同效应。
 
-![协同分析](images/correlation_analysis.png)
+![协同分析](images/complementarity_heatmap.png)
 
 ### LSTM vs ARIMA 对比
 
