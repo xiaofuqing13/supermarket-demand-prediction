@@ -1,0 +1,39 @@
+# 数据文件
+data/
+*.xlsx
+*.csv
+
+# 模型文件
+*.pth
+*.pt
+*.h5
+*.onnx
+
+# 运行结果
+run/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 虚拟环境
+venv/
+env/
+.env
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
